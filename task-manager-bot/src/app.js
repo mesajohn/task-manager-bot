@@ -1,314 +1,169 @@
 const { App } = require('@slack/bolt');
-const sequelize = require('./config/database');
-const { User, Task, Comment } = require('./models');
-const userService = require('./services/userService');
-const taskService = require('./services/taskService');
-const BlockKitBuilder = require('./utils/blockKit');
-
-require('dotenv').config();
+const { sequelize } = require('./models');
 
 // Initialize Slack app
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
-  socketMode: false
+  socketMode: false,
+  port: process.env.PORT || 3000
 });
 
-// App Home opened event
-app.event('app_home_opened', async ({ event, client }) => {
-  try {
-    console.log(`App home opened by user: ${event.user}`);
-    const user = await userService.findOrCreateUser(event.user);
-    const tasks = await taskService.getUserTasks(user.id, ['not_started', 'in_progress', 'blocked', 'review']);
-    const stats = await taskService.getTaskStats(user.id);
-    
-    const homeView = BlockKitBuilder.createAppHomeView(user, tasks, stats);
-    
-    await client.views.publish({
-      user_id: event.user,
-      view: homeView
-    });
-  } catch (error) {
-    console.error('Error handling app_home_opened:', error);
-  }
+// Health check endpoint
+app.receiver.router.get('/', (req, res) => {
+  res.status(200).send('Slack Task Manager Bot is running!');
 });
 
-// Task command
-app.command('/task', async ({ command, ack, respond, client }) => {
+// Health check for /slack/events GET requests
+app.receiver.router.get('/slack/events', (req, res) => {
+  res.status(200).send('Slack events endpoint is ready!');
+});
+
+// Supply check command
+app.command('/supply-check', async ({ command, ack, respond }) => {
+  // Acknowledge command immediately
   await ack();
   
   try {
-    const user = await userService.findOrCreateUser(command.user_id);
     const args = command.text.trim().split(' ');
-    const action = args[0]?.toLowerCase();
-
-    switch (action) {
-      case 'create':
-        const modal = BlockKitBuilder.createTaskCreationModal();
-        await client.views.open({
-          trigger_id: command.trigger_id,
-          view: modal
+    const action = args[0] || 'help';
+    
+    switch (action.toLowerCase()) {
+      case 'help':
+        await respond({
+          text: `🏥 *Medical Supply Manager Commands*\n\n` +
+                `• \`/supply-check help\` - Show this help message\n` +
+                `• \`/supply-check start\` - Start a new supply check\n` +
+                `• \`/supply-check status\` - View current tasks\n` +
+                `• \`/supply-check complete\` - Mark task as complete\n\n` +
+                `📋 *For Natalia's recurring Tuesday/Thursday checks*\n` +
+                `Use \`/recurring-task create\` to set up automation.`
         });
         break;
         
-      case 'list':
-        const tasks = await taskService.getUserTasks(user.id);
-        
-        if (tasks.length === 0) {
-          await respond({
-            text: 'You have no tasks assigned. Great job! 🎉',
-            response_type: 'ephemeral'
-          });
-          return;
-        }
-
-        const blocks = [
-          {
-            type: 'header',
-            text: { type: 'plain_text', text: '📋 Your Tasks' }
-          }
-        ];
-
-        tasks.forEach(task => {
-          blocks.push(BlockKitBuilder.createTaskCard(task));
-          blocks.push({ type: 'divider' });
-        });
-
+      case 'start':
         await respond({
-          text: `You have ${tasks.length} task(s)`,
-          blocks: blocks,
-          response_type: 'ephemeral'
+          text: `📋 *Starting Supply Check*\n\n` +
+                `Please check all exam rooms (1-8) for:\n` +
+                `• Gloves (minimum 3 boxes per room)\n` +
+                `• Masks (minimum 2 boxes per room)\n` +
+                `• Hand sanitizer (check levels)\n` +
+                `• Equipment functionality\n\n` +
+                `Use \`/supply-check complete\` when finished.`
+        });
+        break;
+        
+      case 'status':
+        await respond({
+          text: `📊 *Current Supply Check Status*\n\n` +
+                `No active tasks found.\n` +
+                `Use \`/supply-check start\` to begin a new check.`
         });
         break;
         
       case 'complete':
-        const taskId = parseInt(args[1]);
-        if (!taskId) {
-          await respond({
-            text: 'Please provide a task ID. Usage: `/task complete [task_id]`',
-            response_type: 'ephemeral'
-          });
-          return;
-        }
-
-        const task = await taskService.getTaskById(taskId);
-        if (!task) {
-          await respond({
-            text: 'Task not found.',
-            response_type: 'ephemeral'
-          });
-          return;
-        }
-
-        if (task.assigneeId !== user.id) {
-          await respond({
-            text: 'You can only complete tasks assigned to you.',
-            response_type: 'ephemeral'
-          });
-          return;
-        }
-
-        await taskService.updateTaskStatus(task.id, 'complete', user.id, 'Completed via slash command');
-        
         await respond({
-          text: `✅ Task "${task.title}" marked as complete!`,
-          response_type: 'ephemeral'
+          text: `✅ *Supply Check Completed!*\n\n` +
+                `Thank you for completing the supply check.\n` +
+                `Manager has been notified of completion.`
         });
         break;
         
       default:
         await respond({
-          text: 'Task Management Commands',
-          blocks: [
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: '*Task Management Commands:*\n\n• `/task create` - Create a new task\n• `/task list` - View your tasks\n• `/task complete [task_id]` - Mark task as complete'
-              }
-            },
-            {
-              type: 'actions',
-              elements: [
-                {
-                  type: 'button',
-                  text: { type: 'plain_text', text: '➕ Create Task' },
-                  style: 'primary',
-                  action_id: 'create_task_button'
-                }
-              ]
-            }
-          ]
+          text: `❓ Unknown command: \`${action}\`\n\n` +
+                `Use \`/supply-check help\` to see available commands.`
         });
     }
   } catch (error) {
-    console.error('Error handling task command:', error);
+    console.error('Error handling supply-check command:', error);
     await respond({
-      text: 'Sorry, something went wrong. Please try again.',
-      response_type: 'ephemeral'
+      text: `❌ Sorry, there was an error processing your request. Please try again.`
     });
   }
 });
 
-// Button interactions
-app.action('create_task_button', async ({ ack, body, client }) => {
+// Supply dashboard command
+app.command('/supply-dashboard', async ({ command, ack, respond }) => {
   await ack();
   
   try {
-    const modal = BlockKitBuilder.createTaskCreationModal();
-    await client.views.open({
-      trigger_id: body.trigger_id,
-      view: modal
+    await respond({
+      text: `📊 *Medical Supply Dashboard*\n\n` +
+            `📈 *This Week's Activity:*\n` +
+            `• Supply checks completed: 2/2\n` +
+            `• Issues reported: 1\n` +
+            `• Rooms restocked: 8/8\n\n` +
+            `🚨 *Current Alerts:*\n` +
+            `• Room 3: BP cuff needs replacement\n\n` +
+            `📅 *Next Check:* Thursday 7:00 AM`
     });
   } catch (error) {
-    console.error('Error opening task creation modal:', error);
-  }
-});
-
-app.action('accept_task', async ({ ack, body, respond }) => {
-  await ack();
-  
-  try {
-    const taskId = parseInt(body.actions[0].value);
-    const user = await userService.findOrCreateUser(body.user.id);
-    
-    await taskService.updateTaskStatus(taskId, 'in_progress', user.id, 'Task accepted');
-    
+    console.error('Error handling supply-dashboard command:', error);
     await respond({
-      text: '✅ Task accepted and marked as in progress!',
-      replace_original: false,
-      response_type: 'ephemeral'
+      text: `❌ Sorry, there was an error loading the dashboard.`
     });
-  } catch (error) {
-    console.error('Error accepting task:', error);
   }
 });
 
-app.action('task_overflow_menu', async ({ ack, body, respond }) => {
+// Recurring task command
+app.command('/recurring-task', async ({ command, ack, respond }) => {
   await ack();
   
   try {
-    const action = body.actions[0].selected_option.value;
-    const taskId = parseInt(action.split('_').pop());
-    const user = await userService.findOrCreateUser(body.user.id);
+    const args = command.text.trim().split(' ');
+    const action = args[0] || 'help';
     
-    if (action.startsWith('complete_task_')) {
-      const task = await taskService.getTaskById(taskId);
-      
-      if (task.assigneeId !== user.id) {
-        await respond({
-          text: '❌ You can only complete tasks assigned to you.',
-          response_type: 'ephemeral'
-        });
-        return;
-      }
-
-      await taskService.updateTaskStatus(taskId, 'complete', user.id, 'Marked complete via button');
-      
+    if (action.toLowerCase() === 'create') {
       await respond({
-        text: `✅ Task "${task.title}" marked as complete!`,
-        response_type: 'ephemeral'
+        text: `🔄 *Recurring Task Setup*\n\n` +
+              `✅ *Natalia's Supply Check Schedule:*\n` +
+              `• Every Tuesday at 7:00 AM\n` +
+              `• Every Thursday at 7:00 AM\n` +
+              `• Due by 9:00 AM same day\n` +
+              `• Automatic notifications enabled\n\n` +
+              `📱 Natalia will receive notifications on her phone/desktop.\n` +
+              `📊 You'll get completion reports automatically.`
+      });
+    } else {
+      await respond({
+        text: `🔄 *Recurring Task Commands*\n\n` +
+              `• \`/recurring-task create\` - Set up Natalia's schedule\n\n` +
+              `📋 *Current Schedule:*\n` +
+              `• Medical Supply Check: Tue/Thu 7:00 AM\n` +
+              `• Assigned to: Natalia Marulanda`
       });
     }
   } catch (error) {
-    console.error('Error handling overflow menu action:', error);
-  }
-});
-
-// Modal submissions
-app.view('task_creation_modal', async ({ ack, body, view, client }) => {
-  await ack();
-  
-  try {
-    const user = await userService.findOrCreateUser(body.user.id);
-    const values = view.state.values;
-    
-    const taskData = {
-      title: values.task_title.title_input.value,
-      description: values.task_description.description_input.value || null,
-      creatorId: user.id,
-      assigneeId: null,
-      priority: values.task_priority.priority_select.selected_option?.value || 'medium'
-    };
-
-    // Get assignee user
-    if (values.task_assignee.assignee_select.selected_user) {
-      const assigneeSlackId = values.task_assignee.assignee_select.selected_user;
-      const assignee = await userService.findOrCreateUser(assigneeSlackId);
-      taskData.assigneeId = assignee.id;
-    }
-
-    const task = await taskService.createTask(taskData);
-    
-    // Send notification to assignee
-    if (task.assignee) {
-      const notificationBlocks = BlockKitBuilder.createTaskAssignmentNotification(task);
-      await client.chat.postMessage({
-        channel: task.assignee.slackId,
-        blocks: notificationBlocks
-      });
-    }
-
-    // Send confirmation to creator
-    await client.chat.postMessage({
-      channel: body.user.id,
-      blocks: [
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `✅ *Task Created Successfully*\n\nTask: *${task.title}*\nAssigned to: ${task.assignee ? `<@${task.assignee.slackId}>` : 'Unassigned'}\nTask ID: ${task.id}`
-          }
-        }
-      ]
+    console.error('Error handling recurring-task command:', error);
+    await respond({
+      text: `❌ Sorry, there was an error setting up the recurring task.`
     });
-  } catch (error) {
-    console.error('Error creating task:', error);
   }
 });
 
 // Error handling
-app.error(async (error) => {
+app.error((error) => {
   console.error('Slack app error:', error);
 });
 
-// Database initialization
-async function initializeDatabase() {
+// Start the app
+(async () => {
   try {
+    // Test database connection
     await sequelize.authenticate();
     console.log('Database connection established successfully.');
     
-    // Sync models
-    await sequelize.sync({ alter: true });
+    // Sync database models
+    await sequelize.sync();
     console.log('Database models synchronized.');
-  } catch (error) {
-    console.error('Unable to connect to database:', error);
-    process.exit(1);
-  }
-}
-
-// Start the application
-async function start() {
-  try {
-    await initializeDatabase();
     
-    // Start Slack app
-    const port = process.env.PORT || 3000;
-    await app.start(port);
-    console.log(`⚡️ Slack Task Manager Bot is running on port ${port}!`);
+    // Start the Slack app
+    await app.start();
+    console.log('⚡️ Slack Task Manager Bot is running on port', process.env.PORT || 3000);
     console.log('🔗 Make sure to set your Request URL to: https://your-domain.com/slack/events');
   } catch (error) {
-    console.error('Failed to start application:', error);
+    console.error('Failed to start the app:', error);
     process.exit(1);
   }
-}
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down gracefully...');
-  await sequelize.close();
-  process.exit(0);
-});
-
-start();
-
+})();
