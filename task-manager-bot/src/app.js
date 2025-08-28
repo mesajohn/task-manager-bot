@@ -1,5 +1,4 @@
 const { App } = require('@slack/bolt');
-const { sequelize } = require('./models');
 
 // Initialize Slack app
 const app = new App({
@@ -114,17 +113,10 @@ app.command('/recurring-task', async ({ command, ack, respond }) => {
 // Start the app
 (async () => {
   try {
-    // Test database connection
-    await sequelize.authenticate();
-    console.log('Database connection established successfully.');
-    
-    // Sync database models
-    await sequelize.sync();
-    console.log('Database models synchronized.');
-    
     // Start the Slack app
     await app.start();
     console.log('⚡️ Slack Task Manager Bot is running on port', process.env.PORT || 3000);
+    console.log('🎉 Bot is ready! Test with /supply-check help');
     
   } catch (error) {
     console.error('Failed to start the app:', error);
